@@ -462,6 +462,15 @@ function setupEventListeners() {
             console.log("Generating thumbnails for title ID:", currentTitle.id, "Quantity:", quantity);
             const generateResponse = await generatePaintings(currentTitle.id, quantity);
             console.log("Generate thumbnails response:", generateResponse.data);
+
+            // 🔄 Show placeholder cards immediately
+renderPaintingPlaceholders(generateResponse.data.ideas.map((idea, i) => ({
+    id: idea.id,
+    status: 'pending'
+})));
+
+
+
             
             // Start polling for thumbnail status instead of loading immediately
             pollThumbnailStatus(currentTitle.id, quantity);
@@ -834,6 +843,7 @@ async function generateServerThumbnails(titleObj, references, quantity, isAdditi
     thumbnailReady = (thumbnail) => {
         // Render the thumbnail as soon as it's ready
         renderThumbnail(thumbnail, thumbnail.index);
+        
         completedThumbnails.push(thumbnail);
         
         // Update the AI2 status
@@ -873,6 +883,97 @@ async function generateServerThumbnails(titleObj, references, quantity, isAdditi
         alert('Failed to generate paintings. Please try again.');
         progressSection.style.display = 'none';
         thumbnailReady = null;
+    }
+}
+
+// Called after the generate paintings API returns and placeholders are created
+function startPollingForPaintingProgress(titleId) {
+    let pollInterval = setInterval(async () => {
+        try {
+            const response = await getThumbnails(titleId);
+            const paintings = response.data.paintings;
+            updatePaintingProgress(paintings);
+            // Stop polling if all paintings are done
+            if (paintings.length > 0 && paintings.every(p => p.status === 'completed' || p.status === 'failed')) {
+                clearInterval(pollInterval);
+            }
+        } catch (error) {
+            console.error('Error polling painting progress:', error);
+        }
+    }, 2000);
+}
+
+// Helper: Render painting placeholders
+function renderPaintingPlaceholders(paintings) {
+    thumbnailsGrid.innerHTML = ""; // Clear previous
+    paintings.forEach(painting => {
+        let placeholder = document.createElement('div');
+        placeholder.id = `painting-${painting.id}`;
+        placeholder.className = 'painting-placeholder';
+        // Initial status
+        placeholder.innerHTML = `<div class="progress-bar">Creating prompt...</div>`;
+        thumbnailsGrid.appendChild(placeholder);
+    });
+}
+
+// Helper: Update painting progress/status
+function updatePaintingProgress(paintings) {
+    paintings.forEach(painting => {
+        let placeholder = document.getElementById(`painting-${painting.id}`);
+        if (!placeholder) {
+            placeholder = document.createElement('div');
+            placeholder.id = `painting-${painting.id}`;
+            placeholder.className = 'painting-placeholder';
+            thumbnailsGrid.appendChild(placeholder);
+        }
+        if (painting.status === 'pending') {
+            placeholder.innerHTML = '<div class="progress-bar">Creating prompt...</div>';
+        } else if (painting.status === 'processing') {
+            placeholder.innerHTML = '<div class="progress-bar">Generating image...</div>';
+        } else if (painting.status === 'failed') {
+            placeholder.innerHTML = `<div class="progress-bar error">Failed: ${painting.error_message}</div>`;
+        } else if (painting.status === 'completed') {
+            placeholder.innerHTML = `<img src="${painting.image_url}" alt="Painting ${painting.id}" class="painting-image">`;
+        }
+    });
+}
+
+// On generate button click
+generateBtn.addEventListener('click', async () => {
+    if (!currentTitle) return;
+    const quantity = Number(quantitySelect.value) || 5;
+    try {
+        // Call backend to start generation
+        const { data } = await generateThumbnails(currentTitle.id, quantity);
+        // Show placeholders immediately
+        if (data.ideas && data.ideas.length > 0) {
+            renderPaintingPlaceholders(data.ideas.map(idea => ({ id: idea.id, status: 'pending' })));
+        }
+        // Start polling for progress
+        startPollingForPaintingProgress(currentTitle.id);
+    } catch (error) {
+        alert('Failed to generate paintings. Please try again.');
+        console.error('Error generating paintings:', error);
+    }
+});
+
+// On page load or when switching titles, always poll for current paintings
+async function loadPaintingsForTitle(titleId) {
+    try {
+        const response = await getThumbnails(titleId);
+        const paintings = response.data.paintings;
+        if (paintings.length > 0) {
+            renderPaintingPlaceholders(paintings);
+            updatePaintingProgress(paintings);
+            // If not all done, start polling
+            if (paintings.some(p => p.status === 'pending' || p.status === 'processing')) {
+                startPollingForPaintingProgress(titleId);
+            }
+        } else {
+            thumbnailsGrid.innerHTML = '<div class="empty-state" id="thumbnails-empty-state">No paintings generated yet.</div>';
+        }
+    } catch (error) {
+        console.error('Error loading paintings:', error);
     }
 }
 
@@ -1335,50 +1436,42 @@ async function loadThumbnails(titleId) {
 // Poll for thumbnail generation status
 async function pollThumbnailStatus(titleId, expectedQuantity, attempt = 0) {
     console.log(`[Poll #${attempt + 1}] Entered pollThumbnailStatus for title ${titleId}`);
-    const maxAttempts = 40; // Poll for up to 2 minutes (40 * 3s)
-    const pollInterval = 3000; // Poll every 3 seconds
+    const maxAttempts = 40;
+    const pollInterval = 3000;
 
     if (attempt >= maxAttempts) {
         console.error(`[Poll #${attempt + 1}] Polling timed out.`);
         alert('Thumbnail generation is taking longer than expected. Please check back later.');
         showLoading(false);
-        // Optionally load whatever is available
-        await loadThumbnails(titleId); 
+        await loadThumbnails(titleId);
         return;
     }
 
     try {
         console.log(`[Poll #${attempt + 1}] Before API call to getPaintings`);
         const startTime = Date.now();
-        // Log the API call details before making it
         console.log(`[Poll #${attempt + 1}] Making API call to endpoint: /paintings/${titleId}`);
-        
+
         const response = await getPaintings(titleId);
-        
         console.log(`[Poll #${attempt + 1}] API call completed in ${Date.now() - startTime}ms`);
-        // Use the paintings array instead of thumbnails
+
         const thumbnails = response.data.paintings || [];
         console.log(`[Poll #${attempt + 1}] Fetched thumbnails:`, thumbnails);
 
-        // Filter only the thumbnails belonging to the current generation batch/title
-        // Assuming they are added sequentially and sorted ASC by creation time
-        const relevantThumbnails = thumbnails.filter(t => t.title_id === titleId); 
+        const relevantThumbnails = thumbnails.filter(t => t.title_id === titleId);
+
+        // 🔄 Update currentTitle and re-render the UI
+        if (currentTitle && currentTitle.id === titleId) {
+            currentTitle.thumbnails = relevantThumbnails;
+            renderSavedThumbnails(currentTitle);
+        }
+renderOrUpdatePaintingPlaceholders(relevantThumbnails);
 
         let completedCount = 0;
         let processingCount = 0;
         let pendingCount = 0;
 
-        // Render each thumbnail with its current status
-        // We need to determine the correct index for rendering.
-        // If loadTitle fetches initial thumbnails, we might need to map by ID or rely on the ASC order.
-        // Assuming the index corresponds to the position in the ASC sorted list for this title.
-        relevantThumbnails.forEach((thumbnail, index) => {
-            // Ensure the container exists (it should have been created by generateServerThumbnails)
-            const containerExists = document.getElementById(`thumb-${index}`);
-            if (containerExists) {
-                 renderThumbnail(thumbnail, index);
-            }
-
+        relevantThumbnails.forEach((thumbnail) => {
             if (thumbnail.status === 'completed' || thumbnail.status === 'failed') {
                 completedCount++;
             } else if (thumbnail.status === 'processing') {
@@ -1391,17 +1484,13 @@ async function pollThumbnailStatus(titleId, expectedQuantity, attempt = 0) {
         const totalRelevant = relevantThumbnails.length;
         console.log(`Status: ${completedCount} completed/failed, ${processingCount} processing, ${pendingCount} pending out of ${totalRelevant}`);
 
-        // Update progress UI (example)
         ai1Status.textContent = 'Thumbnail ideas generated.';
         ai1Progress.style.width = '100%';
-        // Base progress on completed thumbnails relative to the total number fetched so far for this title
-        // or use expectedQuantity if it's more reliable for the current batch
+
         const progressPercentage = totalRelevant > 0 ? (completedCount / totalRelevant) * 100 : 0;
         ai2Status.textContent = `Generating images... ${completedCount}/${totalRelevant} complete`;
         ai2Progress.style.width = `${progressPercentage}%`;
 
-        // Check if all *relevant* thumbnails for this title are completed or failed
-        // This check might need refinement if multiple batches can run concurrently
         if (completedCount === totalRelevant && totalRelevant >= expectedQuantity) {
             console.log(`[Poll #${attempt + 1}] Condition met. Polling finished.`);
             progressSection.style.display = 'none';
@@ -1409,25 +1498,71 @@ async function pollThumbnailStatus(titleId, expectedQuantity, attempt = 0) {
             showLoading(false);
         } else {
             console.log(`[Poll #${attempt + 1}] Condition not met (${completedCount}/${totalRelevant} completed). Scheduling next poll.`);
-            // Not finished, poll again after interval
             setTimeout(() => pollThumbnailStatus(titleId, expectedQuantity, attempt + 1), pollInterval);
         }
     } catch (error) {
         console.error(`[Poll #${attempt + 1}] Error during polling:`, error);
-        // Handle polling error (e.g., show message, maybe stop polling)
-        // If it's a transient network error, could retry a few times before failing
         if (attempt < maxAttempts - 1) {
-             console.log(`[Poll #${attempt + 1}] Retrying poll after error.`);
-             setTimeout(() => pollThumbnailStatus(titleId, expectedQuantity, attempt + 1), pollInterval); // Retry on error
+            console.log(`[Poll #${attempt + 1}] Retrying poll after error.`);
+            setTimeout(() => pollThumbnailStatus(titleId, expectedQuantity, attempt + 1), pollInterval);
         } else {
-             console.error(`[Poll #${attempt + 1}] Max retries reached after error.`);
-             alert('Failed to get thumbnail status updates after multiple attempts. Please check back later.');
-             showLoading(false);
-             // Load whatever is available on final error
-             await loadThumbnails(titleId);
+            console.error(`[Poll #${attempt + 1}] Max retries reached after error.`);
+            alert('Failed to get thumbnail status updates after multiple attempts. Please check back later.');
+            showLoading(false);
+            await loadThumbnails(titleId);
         }
     }
 }
 
+
 // Initialize when the DOM is loaded
-document.addEventListener('DOMContentLoaded', init); 
+document.addEventListener('DOMContentLoaded', init);
+
+// New function to render or update painting placeholders
+// ...existing code...
+function renderOrUpdatePaintingPlaceholders(paintings) {
+    const container = document.getElementById('thumbnails-grid');
+
+    paintings.forEach((painting, index) => {
+        // Use painting ID as a unique DOM identifier
+        const thumbId = `thumb-${painting.id}`;
+        let thumbContainer = document.getElementById(thumbId);
+
+        // If placeholder for this painting doesn't exist, create it
+        if (!thumbContainer) {
+            thumbContainer = document.createElement('div');
+            thumbContainer.id = thumbId;
+            thumbContainer.className = 'thumbnail-placeholder';
+            container.appendChild(thumbContainer);
+        }
+
+        // Show status and image (if completed)
+        thumbContainer.innerHTML = `
+            <div class="painting-status-label status-${painting.status}">
+                ${painting.status === 'pending' ? '⏳ Pending' :
+                  painting.status === 'processing' ? '⚙️ Processing' :
+                  painting.status === 'completed' ? '✅ Completed' :
+                  painting.status === 'failed' ? '❌ Failed' : painting.status}
+            </div>
+            ${
+                painting.status === 'completed'
+                ? `<img src="${painting.image_url}" alt="Painting ${painting.id}" class="painting-image">`
+                : ''
+            }
+            ${
+                painting.status === 'failed' && painting.error_message
+                ? `<div class="painting-error-message">${painting.error_message}</div>`
+                : ''
+            }
+        `;
+    });
+}
+// ...existing code...
+
+
+
+
+
+// Inside pollThumbnailStatus, after fetching paintings:
+const thumbnails = response.data.paintings || [];
+renderOrUpdatePaintingPlaceholders(relevantThumbnails);

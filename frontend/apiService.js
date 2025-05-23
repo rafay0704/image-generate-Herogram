@@ -18,7 +18,7 @@ const initAPI = async () => {
       headers: {
         'Content-Type': 'application/json'
       },
-      timeout: 10000 // Add timeout to avoid long waits on network issues
+      timeout: 20000 // Increased timeout to 20 seconds
     });
 
     // Add auth token to requests if available
@@ -44,7 +44,7 @@ const initAPI = async () => {
       headers: {
         'Content-Type': 'application/json'
       },
-      timeout: 10000
+      timeout: 20000 // Increased timeout to 20 seconds
     });
 
     // Add auth token to requests if available
@@ -145,4 +145,4 @@ export const getThumbnails = async (titleId) => {
 // Initialize API when this module is imported
 initAPI();
 
-export default async () => ensureAPI(); 
+export default async () => ensureAPI();

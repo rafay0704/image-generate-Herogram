@@ -80,6 +80,7 @@ async function generateImage(ideaId, prompt, references = []) {
       try {
         console.log('Making request to OpenAI edits endpoint');
         response = await axios.post('https://api.openai.com/v1/images/edits', formData, {
+          timeout: 20000, // Increased timeout to 20 seconds
           headers: {
             'Authorization': `Bearer ${OPENAI_API_KEY}`,
             ...formData.getHeaders()
@@ -123,6 +124,7 @@ async function generateImage(ideaId, prompt, references = []) {
         console.log('Making request to OpenAI generations endpoint with payload:', JSON.stringify(requestBody, null, 2));
         
         response = await axios.post('https://api.openai.com/v1/images/generations', requestBody, {
+          timeout: 20000, // Increased timeout to 20 seconds
           headers: {
             'Authorization': `Bearer ${OPENAI_API_KEY}`,
             'Content-Type': 'application/json'
@@ -232,4 +234,4 @@ async function generateImage(ideaId, prompt, references = []) {
   }
 }
 
-module.exports = { generateImage }; 
+module.exports = { generateImage };
